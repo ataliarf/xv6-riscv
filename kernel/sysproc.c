@@ -29,6 +29,26 @@ sys_fork(void)
   return fork();
 }
 
+
+
+uint64
+sys_get_cpu(void)
+{
+  return get_cpu();
+}
+
+
+uint64
+sys_set_cpu(void)
+{
+  uint64 p;
+  if(argaddr(0, &p) < 0)
+    return -1;
+  return set_cpu(p);
+}
+
+
+
 uint64
 sys_wait(void)
 {

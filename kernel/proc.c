@@ -6,9 +6,19 @@
 #include "proc.h"
 #include "defs.h"
 
+
 struct cpu cpus[NCPU];
+int cpusLinkedLists[NCPU];
 
 struct proc proc[NPROC];
+
+int sleepingHead = -1;
+// int *unusedHead = -1;
+// int *zombieHead = -1;
+struct spinlock sleepingLock;
+struct spinlock unusedLock;
+struct spinlock zombieLock;
+
 
 struct proc *initproc;
 
@@ -20,11 +30,68 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
+extern uint64 cas(volatile void *addr, int expected, int newval);
+
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+
+
+void
+insertNode (int *head, int newNodeIndex){
+  struct proc *p;
+  if (*head==-1){
+    *head=newNodeIndex;
+     p= &proc[*head];
+     p->nextIndex=-1;
+  }
+  else
+  {
+    p= &proc[*head];
+    while (p->nextIndex!=-1){
+      p=&proc[p->nextIndex];
+    }
+    p->nextIndex=newNodeIndex;
+    p=&proc[p->nextIndex];
+    p->nextIndex=-1;
+
+    }
+}
+
+int
+removeNode (int *head, int NodeToRemove){
+  struct proc *p;
+  struct proc *q;
+
+  if (*head==-1)
+    return -1; 
+  if (*head == NodeToRemove){
+    p=&(proc[NodeToRemove]);
+    *head=p->nextIndex;
+    p->nextIndex=-1;
+    return 1;
+  }
+int prev =*head;
+p=&proc[prev];
+int curr= p->nextIndex;
+while (curr!=NodeToRemove){
+  p=&proc[curr];
+  if (p->nextIndex==-1)
+    return -1;
+  else{
+    prev=curr;
+    p=&proc[curr];
+    curr=p->nextIndex;
+  }
+}
+p=&proc[curr];
+q=&proc[prev];
+q->nextIndex=p->nextIndex;
+p->nextIndex=-1;
+return 1;
+}
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -50,11 +117,94 @@ procinit(void)
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+
+  initlock(&sleepingLock, "sleepingLock");
+  initlock(&unusedLock,"unusedLock");
+  initlock(&zombieLock,"zombieLock");
+
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
   }
+  for(p = proc; p < &proc[NPROC]; p++) {  // init unused linked list
+    acquire(&unusedLock);
+  //  insertNode(unusedHead, getProcessIndex(p->pid));
+    release(&unusedLock);
+  }
 }
+
+int
+set_cpu(int cpu_num)
+{
+  struct proc *p;
+  acquire(&sleepingLock);
+  insertNode(&sleepingHead,1);
+  release(&sleepingLock);
+
+    acquire(&sleepingLock);
+   insertNode(&sleepingHead,2);
+     release(&sleepingLock);
+
+    acquire(&sleepingLock);
+ insertNode(&sleepingHead,5);
+      release(&sleepingLock);
+
+acquire(&sleepingLock);
+ insertNode(&sleepingHead,6);
+      release(&sleepingLock);
+
+   int curr=sleepingHead;
+   while (curr!=-1){
+     printf("%d ", curr);
+
+     p=&proc[curr];
+     curr=p->nextIndex;
+   }
+  removeNode(&sleepingHead,2);
+      curr=sleepingHead;
+
+  while (curr!=-1){
+    printf("%d ", curr);
+    p=&proc[curr];
+    curr=p->nextIndex;
+  }
+  removeNode(&sleepingHead,1);
+
+  curr=sleepingHead;
+
+  while (curr!=-1){
+    printf("%d ", curr);
+    p=&proc[curr];
+    curr=p->nextIndex;
+  }
+  //   struct proc *p=myproc();
+  //   p->lastCpuID= cpu_num;
+  //   yield();
+  // //TODO: when we need to return -1?
+  //   return cpu_num;
+return 1;
+}
+
+int
+get_cpu(){
+  struct proc *p=myproc();
+  return p->lastCpuID;
+}
+
+int
+getProcessIndex(int processPid)
+{
+  struct proc *p;
+  int index=0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+      if(p->pid==processPid)
+        return index;
+      else
+        index=index+1;
+  }
+  return -1;
+}
+
 
 // Must be called with interrupts disabled,
 // to prevent race with process being moved
@@ -72,6 +222,7 @@ struct cpu*
 mycpu(void) {
   int id = cpuid();
   struct cpu *c = &cpus[id];
+
   return c;
 }
 
@@ -87,15 +238,13 @@ myproc(void) {
 
 int
 allocpid() {
-  int pid;
-  
-  acquire(&pid_lock);
-  pid = nextpid;
-  nextpid = nextpid + 1;
-  release(&pid_lock);
-
+   int pid;
+  do {
+    pid = nextpid;
+  } while (cas(&nextpid, pid, pid+1)) ;
   return pid;
 }
+
 
 // Look in the process table for an UNUSED proc.
 // If found, initialize state required to run in the kernel,
@@ -119,6 +268,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->nextIndex=-1;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -543,6 +693,9 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+
+  // we added - insert process to SLEEPING linkedlist 
+
 
   sched();
 

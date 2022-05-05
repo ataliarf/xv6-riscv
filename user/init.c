@@ -32,7 +32,7 @@ main(void)
     }
     if(pid == 0){
       exec("sh", argv);
-      printf("init: exec sh failed\n");
+      printf("init: sh failed\n");
       exit(1);
     }
 
