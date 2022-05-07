@@ -5,7 +5,7 @@
 int
 main(int argc, char *argv[])
 {
-    //fork();
+fork();
    set_cpu(1);
     
     exit(0);
