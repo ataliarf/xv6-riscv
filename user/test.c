@@ -5,8 +5,6 @@
 int
 main(int argc, char *argv[])
 {
-fork();
-   set_cpu(1);
-    
+   set_cpu(5); 
     exit(0);
 }

@@ -72,43 +72,43 @@ insertNode (int *head, int newNodeIndex){
 
 int
 removeNode (int *head, int NodeToRemove){
-        printf("removeNode1 ");
+ // printf("removeNode1 ");
 
-//   struct proc *p;
-//   struct proc *q;
+  struct proc *p;
+  struct proc *q;
 
-//   if (*head==-1)
-//     return -1; 
-//   if (*head == NodeToRemove){
-//     p=&(proc[NodeToRemove]);
-//     acquire(&p->nodeLock);
-//     *head=p->nextIndex;
-//     p->nextIndex=-1;
-//     release(&p->nodeLock);
-//     return 1;
-//   }
-// int prev =*head;
-// p=&proc[prev];
-// int curr= p->nextIndex;
-// while (curr!=NodeToRemove){
-//   p=&proc[curr];
-//   if (p->nextIndex==-1)
-//     return -1;
-//   else{
-//     prev=curr;
-//     p=&proc[curr];
-//     curr=p->nextIndex;
-//   }
-// }
-// p=&proc[curr];
-// q=&proc[prev];
-// acquire(&p->nodeLock);
-// acquire(&q->nodeLock);
-// q->nextIndex=p->nextIndex;
-// p->nextIndex=-1;
-// release(&p->nodeLock);
-// release(&q->nodeLock);
-        printf("removeNode2 ");
+  if (*head==-1)
+    return -1; 
+  if (*head == NodeToRemove){
+    p=&(proc[NodeToRemove]);
+    acquire(&p->nodeLock);
+    *head=p->nextIndex;
+    p->nextIndex=-1;
+    release(&p->nodeLock);
+    return 1;
+  }
+int prev =*head;
+p=&proc[prev];
+int curr= p->nextIndex;
+while (curr!=NodeToRemove){
+  p=&proc[curr];
+  if (p->nextIndex==-1)
+    return -1;
+  else{
+    prev=curr;
+    p=&proc[curr];
+    curr=p->nextIndex;
+  }
+}
+p=&proc[curr];
+q=&proc[prev];
+acquire(&p->nodeLock);
+acquire(&q->nodeLock);
+q->nextIndex=p->nextIndex;
+p->nextIndex=-1;
+release(&p->nodeLock);
+release(&q->nodeLock);
+ // printf("removeNode2 ");
 
 return 1;
 }
@@ -138,15 +138,23 @@ procinit(void)
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
 
-    initlock(&sleepingLock, "sleepingLock");
-    initlock(&unusedLock,"unusedLock");
-    initlock(&zombieLock,"zombieLock");
-
+  initlock(&sleepingLock, "sleepingLock");
+  initlock(&unusedLock,"unusedLock");
+  initlock(&zombieLock,"zombieLock");
+  acquire(&unusedLock);
+  int counter=0;
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       initlock(&p->nodeLock, "nodeLock");
       p->kstack = KSTACK((int) (p - proc));
+      //printf("inserted pid : %d", p->pid);
+      printf("inserted index  : %d", counter);
+      insertNode(&unusedHead,counter);
+      counter++;
+      p->lastCpuID=cpuid();
    }
+  release(&unusedLock);
+
      printf("procinit2 ");
 
 }
@@ -155,8 +163,8 @@ int
 set_cpu(int cpu_num)
 {
    struct proc *p;
-   struct cpu *c=mycpu();
-   int curr=c->cpuLinkedListHead;
+   //struct cpu *c=mycpu();
+   int curr=unusedHead;
    while (curr!=-1){
      printf("%d ", curr);
      p=&proc[curr];
@@ -223,13 +231,16 @@ myproc(void) {
 
 int
 allocpid() {
-    printf("allocpid ");
+    printf("allocpid1 ");
 
    int pid;
   do {
     pid = nextpid;
   } while (cas(&nextpid, pid, pid+1)) ;
+      printf("allocpid2 ");
+
   return pid;
+
 }
 
 
@@ -241,16 +252,16 @@ static struct proc*
 allocproc(void)
 {
   struct proc *p;
-    printf("alloproc1 ");
+  printf("alloproc1 ");
+    printf("unsed head %d ",unusedHead);
 
-  for(p = proc; p < &proc[NPROC]; p++) {
-    acquire(&p->lock);
-    if(p->state == UNUSED) {
+    if(unusedHead!=-1) {
+      p=&proc[unusedHead];
+      acquire(&p->lock);
       goto found;
     } else {
-      release(&p->lock);
     }
-  }
+  
   return 0;
 
 found:
@@ -278,9 +289,9 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+      printf("alloproc2 ");
 
   return p;
-      printf("alloproc2 ");
 
 }
 
@@ -304,6 +315,15 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  acquire(&zombieLock);
+  printf("remove Node from free prok");
+  int x = removeNode(&zombieHead,getProcessIndex(p->pid));
+  if(x==1){
+    acquire(&unusedLock);
+    insertNode(&unusedHead,getProcessIndex(p->pid));
+    release(&unusedLock);
+  }
+  release(&zombieLock);
 }
 
 // Create a user page table for a given process,
@@ -368,10 +388,11 @@ void
 userinit(void)
 {
           printf("userinit1 ");
-
+  
   struct proc *p;
   p = allocproc();
   initproc = p;
+ 
 
   struct cpu *c;
   for(c = cpus; c < &cpus[NCPU]; c++) {
@@ -379,7 +400,10 @@ userinit(void)
     c->cpuLinkedListHead=-1;
     initlock(&c->cpuLinkedListLock,"cpuLinkedListLock");
   }
-
+  c=cpus;  
+  acquire(&c->cpuLinkedListLock);
+  insertNode(&c->cpuLinkedListHead,0);
+  release(&c->cpuLinkedListLock);
   
   // allocate one user page and copy init's instructions
   // and data into it.
@@ -395,11 +419,11 @@ userinit(void)
 
   p->state = RUNNABLE;
   struct cpu* d=mycpu();
-  if (p->pid!=1 && p->pid!=2){
+  acquire(&d->cpuLinkedListLock);
   insertNode(&d->cpuLinkedListHead, getProcessIndex(p->pid));
-  }
+  release(&d->cpuLinkedListLock);
   release(&p->lock);
-          printf("userInit2 ");
+  printf("userInit2 ");
 
 }
 
@@ -428,6 +452,7 @@ growproc(int n)
 int
 fork(void)
 {
+  printf("fork1 ");
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
@@ -469,19 +494,15 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
-  np->lastCpuID=cpuid();
+  np->lastCpuID=p->lastCpuID;
   np->nextIndex=-1;
 
    struct cpu* c=mycpu();
-    //acquire(&c->cpuLinkedListLock);
-      printf("fork1 ");
-    if (p->pid!=1 && p->pid!=2){
+    acquire(&c->cpuLinkedListLock);
     insertNode(&c->cpuLinkedListHead, getProcessIndex(pid));
-    }
-    //release(&c->cpuLinkedListLock);
-      printf("fork2 ");
-
+    release(&c->cpuLinkedListLock);
   release(&np->lock);
+      printf("fork2 ");
 
   return pid;
 }
@@ -508,6 +529,7 @@ void
 exit(int status)
 {
   struct proc *p = myproc();
+  struct cpu *c = mycpu();
 
   if(p == initproc)
     panic("init exiting");
@@ -538,7 +560,16 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
+  acquire(&c->cpuLinkedListLock);
+    printf("remove Node from exit");
 
+  int x = removeNode(&c->cpuLinkedListHead,getProcessIndex(p->pid));
+  release(&c->cpuLinkedListLock);
+  if(x==1){
+    acquire(&zombieLock);
+    insertNode(&zombieHead,getProcessIndex(p->pid));
+    release(&zombieLock);
+  }
   release(&wait_lock);
 
   // Jump into the scheduler, never to return.
@@ -605,38 +636,39 @@ wait(uint64 addr)
 
 
 
-
 void
-scheduler(void)
-{
-  struct proc *p;
-  struct cpu *c = mycpu();
-  
-  c->proc = 0;
-  for(;;){
-    // Avoid deadlock by ensuring that devices can interrupt.
-    intr_on();
+scheduler(void) {
+    struct proc *p=proc;
+    struct cpu *c = mycpu();
+    c->proc = 0;
+    for (;;) {
+        // Avoid deadlock by ensuring that devices can interrupt.
+        intr_on();
+        acquire(&c->cpuLinkedListLock);
+        printf("remove Node from sced");
+        int x =  removeNode(&c->cpuLinkedListHead, c->cpuLinkedListHead);
+        release(&c->cpuLinkedListLock);
 
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-      
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+       // printf("process index is : %d", processIndex);
+        if(x == -1)
+            continue;
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-      }
-      release(&p->lock);
+        p = &proc[x];
+        acquire(&p->lock);
+        if (p->state == RUNNABLE) {
+              acquire(&c->cpuLinkedListLock);
+              insertNode(&c->cpuLinkedListHead, c->cpuLinkedListHead);
+              printf("indert is : %d", x);
+              release(&c->cpuLinkedListLock);
+            p->lastCpuID = cpuid();
+            p->state = RUNNING;
+            c->proc = p;
+            swtch(&c->context, &p->context);
+            c->proc = 0;
+        }
+          release(&p->lock);
     }
-  }
 }
-
 
 
 
@@ -671,18 +703,17 @@ sched(void)
 void
 yield(void)
 {
+   printf("yield1 ");
   struct proc *p = myproc();
-  //struct cpu *c= mycpu();
+  struct cpu *c= mycpu();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  //acquire(&c->cpuLinkedListLock);
-  printf("yield1 ");
- // insertNode(&c->cpuLinkedListHead, getProcessIndex(p->pid));
- // release(&c->cpuLinkedListLock);
-   printf("yield2 ");
-
   sched();
+  acquire(&c->cpuLinkedListLock);
+  insertNode(&c->cpuLinkedListHead, getProcessIndex(p->pid));
+  release(&c->cpuLinkedListLock);
   release(&p->lock);
+  printf("yield2 ");
 }
 
 // A fork child's very first scheduling by scheduler()
@@ -712,6 +743,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
+  struct cpu *c= mycpu();
   
   // Must acquire p->lock in order to
   // change p->state and then call sched.
@@ -725,13 +757,25 @@ sleep(void *chan, struct spinlock *lk)
 
   // Go to sleep.
   p->chan = chan;
+  p->lastCpuID=cpuid();
   p->state = SLEEPING;
+
+
 
   // we added - insert process to SLEEPING linkedlist 
 
+  acquire(&c->cpuLinkedListLock);
+    printf("remove Node from sleep");
 
+  int x = removeNode(&c->cpuLinkedListHead, getProcessIndex(p->pid));
+  release(&c->cpuLinkedListLock);
+  if(x==1){
+    acquire(&sleepingLock);
+    insertNode(&sleepingHead, getProcessIndex(p->pid));
+    release(&sleepingLock);
+  }
   sched();
-
+  
   // Tidy up.
   p->chan = 0;
 
@@ -745,29 +789,35 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
-  struct proc *p;
-       // printf("wakeup1 ");
+  //printf ("wakeup 2");
+   struct proc *p;
+   struct cpu *c;
+
 
   for(p = proc; p < &proc[NPROC]; p++) {
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
-          struct cpu *c= mycpu();
-          //acquire(&c->cpuLinkedListLock);
-            
-          if (p->pid!=1 && p->pid!=2){
-          insertNode(&c->cpuLinkedListHead, getProcessIndex(p->pid));
-          }
-          //release(&c->cpuLinkedListLock);
+          int indexOfcpu= p->lastCpuID;
+          c= &cpus[indexOfcpu];
+          acquire(&sleepingLock);
+            printf("remove Node from wakeup");
 
+          int x = removeNode(&sleepingHead,getProcessIndex(p->pid));
+          release(&sleepingLock);
+          if(x==1){
+            acquire(&c->cpuLinkedListLock);
+            insertNode(&c->cpuLinkedListHead, getProcessIndex(p->pid));
+            release(&c->cpuLinkedListLock);
+          }
           p->state = RUNNABLE;
       }
       release(&p->lock);
     }
   }
-           //   printf("wakeup2 ");
-
 }
+
+
 
 // Kill the process with the given pid.
 // The victim won't exit until it tries to return
@@ -780,18 +830,24 @@ kill(int pid)
 
   for(p = proc; p < &proc[NPROC]; p++){
     acquire(&p->lock);
+    struct cpu *c= &cpus[p->lastCpuID];
+
     if(p->pid == pid){
       p->killed = 1;
+      acquire(&c->cpuLinkedListLock);
+      int x = removeNode(&c->cpuLinkedListHead, getProcessIndex(p->pid));
+      release(&c->cpuLinkedListLock);
+      if(x==1){
+        acquire(&zombieLock);
+        insertNode(&zombieHead, getProcessIndex(p->pid));
+        release(&zombieLock);
+      }
       if(p->state == SLEEPING){
         // Wake process from sleep().
-        struct cpu *c= mycpu();
-        //acquire(&c->cpuLinkedListLock);
-        if (p->pid!=1 && p->pid!=2){
+        acquire(&c->cpuLinkedListLock);
         insertNode(&c->cpuLinkedListHead, getProcessIndex(p->pid));
-        }
-        //release(&c->cpuLinkedListLock);
-          printf("kill2 ");
-
+        release(&c->cpuLinkedListLock);
+        printf("kill2 ");
         p->state = RUNNABLE;
       }
       release(&p->lock);
